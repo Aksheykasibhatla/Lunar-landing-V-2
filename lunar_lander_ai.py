@@ -6,7 +6,7 @@ from stable_baselines3.common.monitor import Monitor
 
 
 env = gym.make("LunarLander-v3", render_mode="human")
-env = Monitor(env)  # 🔥 This fixes the warning!
+env = Monitor(env)  
 
 
 env = DummyVecEnv([lambda: env])
