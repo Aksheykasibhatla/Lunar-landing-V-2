@@ -1,0 +1,80 @@
+import gymnasium as gym
+import pygame
+import numpy as np
+from stable_baselines3 import PPO
+import os
+
+class LunarLanderFuelEnv(gym.Env):
+    def __init__(self):
+        super().__init__()
+        self.env = gym.make("LunarLander-v3", render_mode="human")
+        self.observation_space = self.env.observation_space
+        self.action_space = self.env.action_space
+        self.fuel = 5000  
+        self.thruster_sensitivity = 3.0  
+        self.total_reward = 0
+    
+    def reset(self, **kwargs):
+        self.fuel = 5000  # Reset fuel on new episode
+        self.total_reward = 0  
+        obs, info = self.env.reset(**kwargs)
+        return obs, info
+    
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.total_reward += reward  
+        if action in [1, 2, 3]:  
+            self.fuel -= 3  
+            reward -= 0.03  
+            obs[:2] *= self.thruster_sensitivity  
+        
+        if self.fuel <= 0:
+            terminated = True  
+        
+        return obs, reward, terminated, truncated, info
+    
+    def render(self):
+        self.env.render()
+        pygame.font.init()
+        font = pygame.font.SysFont("Arial", 20)
+        screen = pygame.display.get_surface()
+        if screen:
+            fuel_text = font.render(f"Fuel: {self.fuel}", True, (255, 255, 255))
+            reward_text = font.render(f"Total Reward: {self.total_reward:.2f}", True, (255, 255, 255))
+            screen.blit(fuel_text, (10, 10))
+            screen.blit(reward_text, (10, 40))
+        pygame.display.update()
+    
+    def close(self):
+        self.env.close()
+
+def train_ai(env_id='LunarLander-v3', timesteps=1_500_000, model_path='lunar_lander_model.zip'):
+    env = LunarLanderFuelEnv()
+    model = PPO('MlpPolicy', env, verbose=1, learning_rate=0.0003)
+    model.learn(total_timesteps=timesteps)
+    model.save(model_path)
+    env.close()
+    print("Training complete! Model saved.")
+
+def run_simulation(env_id='LunarLander-v3', model_path='lunar_lander_model.zip'):
+    env = LunarLanderFuelEnv()
+    model = PPO.load(model_path)
+    for i in range(5):  
+        obs, _ = env.reset()
+        done = False
+        
+        while not done:
+            action, _states = model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, _ = env.step(action)
+            env.render()
+            done = terminated or truncated
+        print(f"Run {i+1}: Total Reward = {env.total_reward:.2f}, Fuel Remaining = {env.fuel}")
+    
+    env.close()
+    print("Simulation complete!")
+
+if __name__ == "__main__":
+    MODEL_PATH = "lunar_lander_model.zip"
+    if not os.path.exists(MODEL_PATH):
+        train_ai(MODEL_PATH)
+    run_simulation(MODEL_PATH)
