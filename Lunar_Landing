@@ -1,0 +1,155 @@
+import gymnasium as gym
+import numpy as np
+import cv2
+import time
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.callbacks import BaseCallback
+import matplotlib.pyplot as plt
+
+
+class CustomLunarLander(gym.Env):
+    def __init__(self, render_mode="rgb_array"):
+        super().__init__()
+        
+        self.env = gym.make("LunarLander-v3", render_mode=render_mode)
+        self.action_space = self.env.action_space
+        obs_dim = self.env.observation_space.shape[0]
+
+       
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(obs_dim + 3,), dtype=np.float32
+        )
+
+        
+        self.fuel = 1000.0  
+        self.wind = 0.0
+        self.last_obs = None
+        self.step_count = 0
+
+    def reset(self, *, seed=None, options=None):
+        self.fuel = 1000.0
+        self.wind = np.random.uniform(-1.0, 1.0) 
+        self.step_count = 0
+        obs, info = self.env.reset(seed=seed, options=options)
+        self.last_obs = obs
+        return self._get_obs(), info
+
+    def _get_obs(self):
+        lander = self.env.unwrapped.lander
+        dist = np.linalg.norm(lander.position)
+        return np.concatenate([
+            self.last_obs,
+            [self.fuel / 1000.0,    
+             self.wind,            
+             dist]
+        ]).astype(np.float32)
+
+    def step(self, action):
+        self.step_count += 1
+        action = int(action)
+
+        self.env.unwrapped.lander.ApplyForceToCenter((self.wind * 10, 0), True)
+
+       
+        if self.fuel > 0:
+            if action == 2:      
+                self.fuel -= 8
+            elif action in (1, 3):  
+                self.fuel -= 2
+            self.fuel = max(self.fuel, 0)
+        else:
+            action = 0  
+
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.last_obs = obs
+
+        # simple reward shaping
+        lander = self.env.unwrapped.lander
+        dist = np.linalg.norm(lander.position)
+        shaped = reward                            \
+                 + 0.05 * (1 - dist/2.5)           \
+                 - 0.0005 * (1000.0 - self.fuel)   \
+                 - 0.1 * abs(lander.linearVelocity[0])
+
+        info["episode"] = {"r": shaped, "l": self.step_count}
+
+      
+        print(f"[Step {self.step_count:04d}] a={action} fuel={self.fuel:.1f} shaped_r={shaped:.2f}")
+
+        return self._get_obs(), shaped, terminated, truncated, info
+
+    def render(self):
+        return self.env.render()
+
+    def close(self):
+        self.env.close()
+
+
+
+class RewardCallback(BaseCallback):
+    def __init__(self):
+        super().__init__()
+        self.rewards = []
+
+    def _on_step(self) -> bool:
+        info = self.locals["infos"][0]
+        if "episode" in info:
+            self.rewards.append(info["episode"]["r"])
+        return True
+
+    def plot_rewards(self):
+        if not self.rewards:
+            print("No rewards to plot.")
+            return
+        plt.figure(figsize=(10,4))
+        plt.plot(self.rewards, linewidth=1)
+        plt.title("Episode Shaped Rewards")
+        plt.xlabel("Episode")
+        plt.ylabel("Reward")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+
+
+def train_model():
+    
+    env = DummyVecEnv([lambda: Monitor(CustomLunarLander(render_mode="rgb_array"))])
+    model = PPO("MlpPolicy", env, verbose=1)
+    cb = RewardCallback()
+    model.learn(total_timesteps=200_000, callback=cb)
+    model.save("lander_model_ppo")
+    cb.plot_rewards()
+    env.close()
+
+def evaluate_model():
+    
+    eval_env = CustomLunarLander(render_mode="human")
+    model = PPO.load("lander_model_ppo")
+
+    for ep in range(10):
+        obs, _ = eval_env.reset()
+        done = False
+        tot_r = 0.0
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, r, done, truncated, _ = eval_env.step(action)
+            tot_r += r
+            
+            time.sleep(0.02)
+        print(f"Episode {ep+1} Total Reward: {tot_r:.2f}")
+
+    eval_env.close()
+
+
+
+if __name__ == "__main__":
+    choice = input("Enter 'train' or 'eval': ").strip().lower()
+    if choice == "train":
+        train_model()
+    elif choice == "eval":
+        evaluate_model()
+    else:
+        print("Invalid, use 'train' or 'eval'.")
